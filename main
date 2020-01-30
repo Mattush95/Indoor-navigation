@@ -1,0 +1,939 @@
+
+/**
+  ******************************************************************************
+  * @file           : main.c
+  * @brief          : Main program body
+  ******************************************************************************
+  ** This notice applies to any and all portions of this file
+  * that are not between comment pairs USER CODE BEGIN and
+  * USER CODE END. Other portions of this file, whether 
+  * inserted by the user or by software development tools
+  * are owned by their respective copyright owners.
+  *
+  * COPYRIGHT(c) 2020 STMicroelectronics
+  *
+  * Redistribution and use in source and binary forms, with or without modification,
+  * are permitted provided that the following conditions are met:
+  *   1. Redistributions of source code must retain the above copyright notice,
+  *      this list of conditions and the following disclaimer.
+  *   2. Redistributions in binary form must reproduce the above copyright notice,
+  *      this list of conditions and the following disclaimer in the documentation
+  *      and/or other materials provided with the distribution.
+  *   3. Neither the name of STMicroelectronics nor the names of its contributors
+  *      may be used to endorse or promote products derived from this software
+  *      without specific prior written permission.
+  *
+  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+  * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+  * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+  * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+  * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+  * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+  * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+  * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  *
+  ******************************************************************************
+  */
+/* Includes ------------------------------------------------------------------*/
+#include "main.h"
+#include "stm32f0xx_hal.h"
+
+/* USER CODE BEGIN Includes */
+#include "math.h"
+#include "stdio.h"
+#include "stdlib.h"
+#include <stdbool.h>
+
+/* USER CODE END Includes */
+
+/* Private variables ---------------------------------------------------------*/
+I2C_HandleTypeDef hi2c2;
+
+TIM_HandleTypeDef htim1;
+TIM_HandleTypeDef htim2;
+TIM_HandleTypeDef htim6;
+
+UART_HandleTypeDef huart1;
+UART_HandleTypeDef huart3;
+
+/* USER CODE BEGIN PV */
+/* Private variables ---------------------------------------------------------*/
+uint8_t Buffer[0],Buffer1[0],Buffer_pom[64],Buffer_pom1[64],NotCircularBuffer[130],NotCircularBuffer1[130],position=0,count=0,position1=0;
+int X_mm,Y_mm,Z_mm,X_mm1,Y_mm1,Z_mm1, pocetposlani=0,a=0, Addres_beacon,len,skuska,speed,steer,heading,heading1,headingg=0,R=0,time,error,deriv,error_prev,u;
+int X_mmm,Y_mmm,X_mmm1,Y_mmm1,X,Y,Point_angle;
+uint8_t movement,index_of_movement[20],Total_nmb_of_movement,acc_Roll,acc_Pitch,Count_body=0,posielanie;
+int16_t X_target_movement_cm[20],Y_target_movement_cm[20],Z_target_movement_cm[20],orientation;
+float Kp,Kd;
+bool good=true,Go=false , good1=true;
+struct Quaternion Q;
+struct EulerAngles Angles,acc;
+struct poloha h1,h2,h1filtered,h2filtered,h1filt_prev,h2filt_prev;
+struct poloha_pole h1p,h2p,h1c,h2c;
+volatile uint8_t pocetbytov=48,pocetbytov1=48;
+char data[]="nieco";
+
+
+
+
+#define Address_MPU_9250 0xd0   //1101000<<1 -> 11010000 =0xd0 devices should be b1101000 (pin AD0 is logic low)
+/* USER CODE END PV */
+
+/* Private function prototypes -----------------------------------------------*/
+void SystemClock_Config(void);
+static void MX_GPIO_Init(void);
+static void MX_USART1_UART_Init(void);
+static void MX_TIM1_Init(void);
+static void MX_TIM2_Init(void);
+static void MX_I2C2_Init(void);
+static void MX_TIM6_Init(void);
+static void MX_USART3_UART_Init(void);
+                                    
+void HAL_TIM_MspPostInit(TIM_HandleTypeDef *htim);
+                                
+                                
+
+/* USER CODE BEGIN PFP */
+/* Private function prototypes -----------------------------------------------*/
+
+
+
+struct Quaternion {
+    float w, x, y, z;
+};
+
+struct EulerAngles {
+    float roll, pitch, yaw;
+};
+
+struct poloha {
+	int x,y,z;
+};
+
+struct poloha_pole {
+	int x[21],y[21],z[21];
+};
+
+ struct EulerAngles ToEulerAngles(  struct Quaternion q ) {
+    struct EulerAngles angles;
+
+    // roll (x-axis rotation)
+    double sinr_cosp = 2 * (q.w * q.x + q.y * q.z);
+    double cosr_cosp = 1 - 2 * (q.x * q.x + q.y * q.y);
+    angles.roll = atan2(sinr_cosp, cosr_cosp);
+
+    // pitch (y-axis rotation)
+    double sinp = 2 * (q.w * q.y - q.z * q.x);
+    int i= sinp;
+    if ( (abs(i)) >= 1){
+        angles.pitch = copysign(M_PI / 2, sinp);// use 90 degrees if out of range
+    }
+    else
+        angles.pitch = asin(sinp);
+
+    // yaw (z-axis rotation)
+    double siny_cosp = 2 * (q.w * q.z + q.x * q.y);
+    double cosy_cosp = 1 - 2 * (q.y * q.y + q.z * q.z);
+    angles.yaw = atan2(siny_cosp, cosy_cosp);
+
+
+    //to degreee
+    angles.yaw=(angles.yaw*(180/M_PI));
+    angles.pitch=(angles.pitch*(180/M_PI));
+    angles.roll=(angles.roll*(180/M_PI));
+
+    return angles;
+}
+
+
+ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
+
+	if (huart->Instance == USART1) {
+
+		if (position >= pocetbytov) {
+			position = 0;
+			for (int i = 0; i < 48; i++) {
+				NotCircularBuffer[i] = Buffer_pom[i];
+				Buffer_pom[i] = 0;
+			}
+
+			if (NotCircularBuffer[0] == 0xff && NotCircularBuffer[1] == 0x4a) {
+
+				switch (NotCircularBuffer[2]) {
+				case 0x01: {
+
+					movement = NotCircularBuffer[5];
+					index_of_movement[pocetposlani] = NotCircularBuffer[6];
+					Total_nmb_of_movement = NotCircularBuffer[7];
+					X_target_movement_cm[pocetposlani] =
+							(int16_t) (NotCircularBuffer[9] << 8
+									| NotCircularBuffer[8]);
+					Y_target_movement_cm[pocetposlani] =
+							(int16_t) (NotCircularBuffer[11] << 8
+									| NotCircularBuffer[10]);
+					Z_target_movement_cm[pocetposlani] =
+							(int16_t) (NotCircularBuffer[13] << 8
+									| NotCircularBuffer[12]);
+					pocetposlani = pocetposlani + 1;
+					break;
+				}
+				}
+
+			}
+
+		}
+
+		good = true;
+
+		if (position == 0) {
+			if (Buffer[0] != 0xff) {
+				position = 0;
+				good = false;
+			} else
+				Buffer_pom[position] = Buffer[0];
+		} else if (position == 1) {
+			if (Buffer[0] == 0x47) {
+				Buffer_pom[position] = Buffer[0];
+				pocetbytov = 48;
+			} else if (Buffer[0] == 0x4a) {
+				Buffer_pom[position] = Buffer[0];
+				pocetbytov = 18;
+			} else {
+				position = 0;
+				good = false;
+			}
+		} else if (position == 2) {
+			if (Buffer[0] == 0x5) {
+				Buffer_pom[position] = Buffer[0];
+				pocetbytov = 48;
+			} else if (Buffer[0] == 0x01) {
+				Buffer_pom[position] = Buffer[0];
+				pocetbytov = 18;
+			} else if (Buffer[0] == 0x11) {
+				Buffer_pom[position] = Buffer[0];
+				pocetbytov = 29;
+			} else {
+				position = 0;
+				good = false;
+			}
+
+		} else if (position > 3) {
+			Buffer_pom[position] = Buffer[0];
+		}
+
+		if (good)
+			position = position + 1;
+
+	}
+
+	if (huart->Instance == USART3) {
+
+		if (position1 >= pocetbytov1) {
+			position1 = 0;
+			for (int ii = 0; ii < 48; ii++) {
+				NotCircularBuffer1[ii] = Buffer_pom1[ii];
+				Buffer_pom1[ii] = 0;
+			}
+		}
+
+		good1 = true;
+
+		if (position1 == 0) {
+			if (Buffer1[0] != 0xff) {
+				position1 = 0;
+				good1 = false;
+			} else
+				Buffer_pom1[position1] = Buffer1[0];
+		} else if (position1 == 1) {
+			if (Buffer1[0] == 0x47) {
+				Buffer_pom1[position1] = Buffer1[0];
+				pocetbytov1 = 48;
+			} else if (Buffer[0] == 0x4a) {
+				Buffer_pom1[position1] = Buffer1[0];
+				pocetbytov1 = 18;
+			} else {
+				position1 = 0;
+				good = false;
+			}
+		} else if (position1 == 2) {
+			if (Buffer1[0] == 0x5) {
+				Buffer_pom1[position1] = Buffer1[0];
+				pocetbytov1 = 48;
+			} else if (Buffer1[0] == 0x01) {
+				Buffer_pom1[position1] = Buffer1[0];
+				pocetbytov1 = 18;
+			} else if (Buffer1[0] == 0x11) {
+				Buffer_pom1[position1] = Buffer1[0];
+				pocetbytov1 = 29;
+			} else {
+				position1 = 0;
+				good1 = false;
+			}
+
+		} else if (position1 > 3) {
+			Buffer_pom1[position1] = Buffer1[0];
+		}
+
+		if (good1)
+			position1 = position1 + 1;
+
+	}
+
+}
+
+
+
+
+ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
+
+
+
+	 if (Go) {
+		 HAL_GPIO_WritePin(GPIOC, LED_Green_Pin, GPIO_PIN_RESET);
+		 HAL_GPIO_WritePin(GPIOC, LED_Blue_Pin, GPIO_PIN_RESET);
+		 HAL_GPIO_WritePin(GPIOC, LED_Orange_Pin, GPIO_PIN_RESET);
+		 HAL_GPIO_WritePin(GPIOC, LED_Red_Pin, GPIO_PIN_RESET);
+		 Go = false;
+
+	 } else {
+		 HAL_GPIO_WritePin(GPIOC, LED_Green_Pin, GPIO_PIN_SET);
+		 HAL_GPIO_WritePin(GPIOC, LED_Blue_Pin, GPIO_PIN_SET);
+		 HAL_GPIO_WritePin(GPIOC, LED_Orange_Pin, GPIO_PIN_SET);
+		 HAL_GPIO_WritePin(GPIOC, LED_Red_Pin, GPIO_PIN_SET);
+		 Go = true;
+	 }
+ }
+
+
+ void swap(int *p,int *q) {
+    int t;
+
+    t=*p;
+    *p=*q;
+    *q=t;
+ }
+
+ void sort(int a[],int n) {
+    int i,j;
+
+    for(i = 0;i < n-1;i++) {
+       for(j = 0;j < n-i-1;j++) {
+          if(a[j] > a[j+1])
+             swap(&a[j],&a[j+1]);
+       }
+    }
+ }
+/* USER CODE END PFP */
+
+/* USER CODE BEGIN 0 */
+
+/* USER CODE END 0 */
+
+/**
+  * @brief  The application entry point.
+  *
+  * @retval None
+  */
+int main(void)
+{
+  /* USER CODE BEGIN 1 */
+
+  /* USER CODE END 1 */
+
+  /* MCU Configuration----------------------------------------------------------*/
+
+  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
+  HAL_Init();
+
+  /* USER CODE BEGIN Init */
+
+  /* USER CODE END Init */
+
+  /* Configure the system clock */
+  SystemClock_Config();
+
+  /* USER CODE BEGIN SysInit */
+
+  /* USER CODE END SysInit */
+
+  /* Initialize all configured peripherals */
+  MX_GPIO_Init();
+  MX_USART1_UART_Init();
+  MX_TIM1_Init();
+  MX_TIM2_Init();
+  MX_I2C2_Init();
+  MX_TIM6_Init();
+  MX_USART3_UART_Init();
+  /* USER CODE BEGIN 2 */
+
+  HAL_TIM_PWM_Start(&htim1,TIM_CHANNEL_1);
+  HAL_TIM_PWM_Start(&htim2,TIM_CHANNEL_1);
+  HAL_TIM_Base_Start(&htim6);
+  __HAL_UART_ENABLE_IT(&huart1,UART_IT_RXNE);
+  HAL_UART_Receive_IT(&huart1,Buffer,1);
+  __HAL_UART_ENABLE_IT(&huart3,UART_IT_RXNE);
+  HAL_UART_Receive_IT(&huart3,Buffer1,1);
+  speed=1600;
+  steer=1436;
+  __HAL_TIM_SET_COMPARE(&htim2,TIM_CHANNEL_1,1550);
+  __HAL_TIM_SET_COMPARE(&htim1,TIM_CHANNEL_1,steer);
+
+
+
+
+
+
+
+  /* USER CODE END 2 */
+
+  /* Infinite loop */
+  /* USER CODE BEGIN WHILE */
+  while (1)
+  {
+
+  /* USER CODE END WHILE */
+
+  /* USER CODE BEGIN 3 */
+
+		if (NotCircularBuffer[0] == 0xff && NotCircularBuffer[1] == 0x47
+				&& (NotCircularBuffer[5]
+						| (((uint32_t) NotCircularBuffer[6]) << 8)
+						| (((uint32_t) NotCircularBuffer[7]) << 16)
+						| (((uint32_t) NotCircularBuffer[8]) << 24)) < 10000) {
+
+			switch (NotCircularBuffer[2]) {
+			case 0x5: {
+				h1.x = NotCircularBuffer[5]
+						| (((uint32_t) NotCircularBuffer[6]) << 8)
+						| (((uint32_t) NotCircularBuffer[7]) << 16)
+						| (((uint32_t) NotCircularBuffer[8]) << 24); //Buffer_pom[8]  <<  24 | Buffer_pom[7] << 16 | Buffer_pom[6] <<8 | Buffer_pom[5];
+				h1.y = NotCircularBuffer[9]
+						| (((uint32_t) NotCircularBuffer[10]) << 8)
+						| (((uint32_t) NotCircularBuffer[11]) << 16)
+						| (((uint32_t) NotCircularBuffer[12]) << 24);
+				h1.z = NotCircularBuffer[13]
+						| (((uint32_t) NotCircularBuffer[14]) << 8)
+						| (((uint32_t) NotCircularBuffer[15]) << 16)
+						| (((uint32_t) NotCircularBuffer[16]) << 24);
+				Q.w = (int16_t) (NotCircularBuffer[17]
+						| (((uint16_t) NotCircularBuffer[18]) << 8))
+						/ 10000.000;
+				Q.x = (int16_t) (NotCircularBuffer[19]
+						| (((uint16_t) NotCircularBuffer[20]) << 8))
+						/ 10000.000;
+				Q.y = (int16_t) (NotCircularBuffer[21]
+						| (((uint16_t) NotCircularBuffer[22]) << 8))
+						/ 10000.000;
+				Q.z = (int16_t) (NotCircularBuffer[23]
+						| (((uint16_t) NotCircularBuffer[24]) << 8))
+						/ 10000.000;
+				Angles = ToEulerAngles(Q);
+				Addres_beacon = NotCircularBuffer[37];
+
+				break;
+			}
+			case 0x11: {
+				//Buffer_pom[8]  <<  24 | Buffer_pom[7] << 16 | Buffer_pom[6] <<8 | Buffer_pom[5];
+				h1.x = NotCircularBuffer[9]
+						| (((uint32_t) NotCircularBuffer[10]) << 8)
+						| (((uint32_t) NotCircularBuffer[11]) << 16)
+						| (((uint32_t) NotCircularBuffer[12]) << 24);
+				h1.y = NotCircularBuffer[13]
+						| (((uint32_t) NotCircularBuffer[14]) << 8)
+						| (((uint32_t) NotCircularBuffer[15]) << 16)
+						| (((uint32_t) NotCircularBuffer[16]) << 24);
+				h1.z = NotCircularBuffer[17]
+						| (((uint32_t) NotCircularBuffer[18]) << 8)
+						| (((uint32_t) NotCircularBuffer[19]) << 16)
+						| (((uint32_t) NotCircularBuffer[20]) << 24);
+				Addres_beacon = NotCircularBuffer[22];
+				NotCircularBuffer[24] = NotCircularBuffer[24] & ~0xF8;
+				orientation = (NotCircularBuffer[23]
+						| (((uint16_t) NotCircularBuffer[24]) << 8));
+
+			}
+
+			}
+
+		}
+
+		if (NotCircularBuffer1[0] == 0xff && NotCircularBuffer1[1] == 0x47
+				&& (NotCircularBuffer1[5]
+						| (((uint32_t) NotCircularBuffer1[6]) << 8)
+						| (((uint32_t) NotCircularBuffer1[7]) << 16)
+						| (((uint32_t) NotCircularBuffer1[8]) << 24)) < 10000) {
+			switch (NotCircularBuffer1[2]) {
+			case 0x5: {
+				h2.x = NotCircularBuffer1[5]
+						| (((uint32_t) NotCircularBuffer1[6]) << 8)
+						| (((uint32_t) NotCircularBuffer1[7]) << 16)
+						| (((uint32_t) NotCircularBuffer1[8]) << 24); //Buffer_pom[8]  <<  24 | Buffer_pom[7] << 16 | Buffer_pom[6] <<8 | Buffer_pom[5];
+				h2.y = NotCircularBuffer1[9]
+						| (((uint32_t) NotCircularBuffer1[10]) << 8)
+						| (((uint32_t) NotCircularBuffer1[11]) << 16)
+						| (((uint32_t) NotCircularBuffer1[12]) << 24);
+				h2.z = NotCircularBuffer1[13]
+						| (((uint32_t) NotCircularBuffer1[14]) << 8)
+						| (((uint32_t) NotCircularBuffer1[15]) << 16)
+						| (((uint32_t) NotCircularBuffer1[16]) << 24);
+				break;
+			}
+			}
+		}
+
+
+	  h1p.x[count]=h1.x;
+	  h1p.y[count]=h1.y;
+	  h2p.x[count]=h2.x;
+	  h2p.y[count]=h2.y;
+	  count+=1;
+	  for(int i=0;i<21;i++){
+		  h1c.x[i]=h1p.x[i];
+		  h1c.y[i]=h1p.y[i];
+		  h2c.x[i]=h2p.x[i];
+		  h2c.y[i]=h2p.y[i];
+	  }
+	  sort(h1c.x,21);
+	  sort(h1c.y,21);
+	  sort(h2c.x,21);
+	  sort(h2c.y,21);
+	  if (count==21)count=0;
+	  for(int i=4;i<17;i++){
+		  h1filtered.x+=(h1c.x[i]);
+		  h1filtered.y+=(h1c.y[i]);
+		  h2filtered.x+=(h2c.x[i]);
+		  h2filtered.y+=(h2c.y[i]);
+	  }
+	  h1filtered.x=h1filtered.x/14*0.1+(1-0.1)*h1filt_prev.x;
+	  h1filt_prev.x=h1filtered.x;
+	  h1filtered.y=h1filtered.y/14*0.1+(1-0.1)*h1filt_prev.y;
+	  h1filt_prev.y=h1filtered.y;
+	  h2filtered.x=h2filtered.x/14*0.1+(1-0.1)*h2filt_prev.x;
+	  h2filt_prev.x=h2filtered.x;
+	  h2filtered.y=h2filtered.y/14*0.1+(1-0.1)*h2filt_prev.y;
+	  h2filt_prev.y=h2filtered.y;
+
+
+
+
+	  heading = (atan2((h1filtered.y - h2filtered.y)/10 ,
+			  (h1filtered.x - h2filtered.x)/10 ) * 180 / M_PI) * 0.5
+					  + (1 - 0.5) * heading1;
+	  heading1 = heading;
+
+		if (Go) {
+			R = sqrt(
+					(X_target_movement_cm[Count_body] - (h1filtered.x / 10))
+							* (X_target_movement_cm[Count_body] - (h1filtered.x / 10))
+							+ (Y_target_movement_cm[Count_body] - (h1filtered.y/ 10))
+									* (Y_target_movement_cm[Count_body]
+											- (h1filtered.y / 10)));
+			if (R < 100)
+				Count_body = Count_body + 1;
+			Point_angle = atan2((Y_target_movement_cm[Count_body] - (h1filtered.y / 10)),
+					(X_target_movement_cm[Count_body] - (h1filtered.x / 10))) * 180 / M_PI;
+			Kp = 3.5;
+			Kd = 1.125;
+			time = __HAL_TIM_GET_COUNTER(&htim6);
+			if ((Point_angle - heading) > 180
+					|| (Point_angle - heading) < -180) {
+				error = ((180 - abs(Point_angle)) + (180 - abs(heading)))
+						* (-1);
+			} else
+				error = Point_angle - heading;
+			deriv = (error - error_prev) / (time / 1000);
+			u = Kp * error + Kd * deriv;
+			error_prev = error;
+			steer = 1400 + u;
+			__HAL_TIM_SET_COUNTER(&htim6, 0);
+			if (steer > 1720)
+				steer = 1720;
+			if (steer < 1145)
+				steer = 1145;
+			__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, steer); //STEER     0% -> 1.436ms   dolava 1,733ms   doprava 1,138ms
+
+		}
+
+
+
+
+	  //I2C_external_IMU();
+		posielanie += 1;
+		if (posielanie == 2) {
+			len = sprintf(data, " Angle: %i Point_Angle: %i R:  %i Count:  %i \r\n ",
+					heading,Point_angle,R,Count_body);
+			HAL_UART_Transmit_IT(&huart1, (uint8_t*) data, len);
+			posielanie=0;
+		}
+
+
+
+
+	  //__HAL_TIM_SET_COMPARE(&htim2,TIM_CHANNEL_1,1513); //SPEED     0% ->  1,513ms   100% -> 1,77ms   -100% -> 1,196ms
+	  HAL_Delay(20);
+
+
+  }
+  /* USER CODE END 3 */
+
+}
+
+/**
+  * @brief System Clock Configuration
+  * @retval None
+  */
+void SystemClock_Config(void)
+{
+
+  RCC_OscInitTypeDef RCC_OscInitStruct;
+  RCC_ClkInitTypeDef RCC_ClkInitStruct;
+  RCC_PeriphCLKInitTypeDef PeriphClkInit;
+
+    /**Initializes the CPU, AHB and APB busses clocks 
+    */
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI48;
+  RCC_OscInitStruct.HSI48State = RCC_HSI48_ON;
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_NONE;
+  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+  {
+    _Error_Handler(__FILE__, __LINE__);
+  }
+
+    /**Initializes the CPU, AHB and APB busses clocks 
+    */
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
+                              |RCC_CLOCKTYPE_PCLK1;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_HSI48;
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
+
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_1) != HAL_OK)
+  {
+    _Error_Handler(__FILE__, __LINE__);
+  }
+
+  PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_USART1;
+  PeriphClkInit.Usart1ClockSelection = RCC_USART1CLKSOURCE_PCLK1;
+  if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK)
+  {
+    _Error_Handler(__FILE__, __LINE__);
+  }
+
+    /**Configure the Systick interrupt time 
+    */
+  HAL_SYSTICK_Config(HAL_RCC_GetHCLKFreq()/1000);
+
+    /**Configure the Systick 
+    */
+  HAL_SYSTICK_CLKSourceConfig(SYSTICK_CLKSOURCE_HCLK);
+
+  /* SysTick_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(SysTick_IRQn, 0, 0);
+}
+
+/* I2C2 init function */
+static void MX_I2C2_Init(void)
+{
+
+  hi2c2.Instance = I2C2;
+  hi2c2.Init.Timing = 0x20303E5D;
+  hi2c2.Init.OwnAddress1 = 0;
+  hi2c2.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+  hi2c2.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+  hi2c2.Init.OwnAddress2 = 0;
+  hi2c2.Init.OwnAddress2Masks = I2C_OA2_NOMASK;
+  hi2c2.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+  hi2c2.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+  if (HAL_I2C_Init(&hi2c2) != HAL_OK)
+  {
+    _Error_Handler(__FILE__, __LINE__);
+  }
+
+    /**Configure Analogue filter 
+    */
+  if (HAL_I2CEx_ConfigAnalogFilter(&hi2c2, I2C_ANALOGFILTER_ENABLE) != HAL_OK)
+  {
+    _Error_Handler(__FILE__, __LINE__);
+  }
+
+    /**Configure Digital filter 
+    */
+  if (HAL_I2CEx_ConfigDigitalFilter(&hi2c2, 0) != HAL_OK)
+  {
+    _Error_Handler(__FILE__, __LINE__);
+  }
+
+}
+
+/* TIM1 init function */
+static void MX_TIM1_Init(void)
+{
+
+  TIM_ClockConfigTypeDef sClockSourceConfig;
+  TIM_MasterConfigTypeDef sMasterConfig;
+  TIM_OC_InitTypeDef sConfigOC;
+  TIM_BreakDeadTimeConfigTypeDef sBreakDeadTimeConfig;
+
+  htim1.Instance = TIM1;
+  htim1.Init.Prescaler = 47;
+  htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim1.Init.Period = 16400;
+  htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim1.Init.RepetitionCounter = 0;
+  htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim1) != HAL_OK)
+  {
+    _Error_Handler(__FILE__, __LINE__);
+  }
+
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim1, &sClockSourceConfig) != HAL_OK)
+  {
+    _Error_Handler(__FILE__, __LINE__);
+  }
+
+  if (HAL_TIM_PWM_Init(&htim1) != HAL_OK)
+  {
+    _Error_Handler(__FILE__, __LINE__);
+  }
+
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim1, &sMasterConfig) != HAL_OK)
+  {
+    _Error_Handler(__FILE__, __LINE__);
+  }
+
+  sConfigOC.OCMode = TIM_OCMODE_PWM1;
+  sConfigOC.Pulse = 0;
+  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCNPolarity = TIM_OCNPOLARITY_HIGH;
+  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+  sConfigOC.OCIdleState = TIM_OCIDLESTATE_RESET;
+  sConfigOC.OCNIdleState = TIM_OCNIDLESTATE_RESET;
+  if (HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
+  {
+    _Error_Handler(__FILE__, __LINE__);
+  }
+
+  sBreakDeadTimeConfig.OffStateRunMode = TIM_OSSR_DISABLE;
+  sBreakDeadTimeConfig.OffStateIDLEMode = TIM_OSSI_DISABLE;
+  sBreakDeadTimeConfig.LockLevel = TIM_LOCKLEVEL_OFF;
+  sBreakDeadTimeConfig.DeadTime = 0;
+  sBreakDeadTimeConfig.BreakState = TIM_BREAK_DISABLE;
+  sBreakDeadTimeConfig.BreakPolarity = TIM_BREAKPOLARITY_HIGH;
+  sBreakDeadTimeConfig.AutomaticOutput = TIM_AUTOMATICOUTPUT_DISABLE;
+  if (HAL_TIMEx_ConfigBreakDeadTime(&htim1, &sBreakDeadTimeConfig) != HAL_OK)
+  {
+    _Error_Handler(__FILE__, __LINE__);
+  }
+
+  HAL_TIM_MspPostInit(&htim1);
+
+}
+
+/* TIM2 init function */
+static void MX_TIM2_Init(void)
+{
+
+  TIM_ClockConfigTypeDef sClockSourceConfig;
+  TIM_MasterConfigTypeDef sMasterConfig;
+  TIM_OC_InitTypeDef sConfigOC;
+
+  htim2.Instance = TIM2;
+  htim2.Init.Prescaler = 47;
+  htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim2.Init.Period = 16400;
+  htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
+  {
+    _Error_Handler(__FILE__, __LINE__);
+  }
+
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim2, &sClockSourceConfig) != HAL_OK)
+  {
+    _Error_Handler(__FILE__, __LINE__);
+  }
+
+  if (HAL_TIM_PWM_Init(&htim2) != HAL_OK)
+  {
+    _Error_Handler(__FILE__, __LINE__);
+  }
+
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK)
+  {
+    _Error_Handler(__FILE__, __LINE__);
+  }
+
+  sConfigOC.OCMode = TIM_OCMODE_PWM1;
+  sConfigOC.Pulse = 0;
+  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+  if (HAL_TIM_PWM_ConfigChannel(&htim2, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
+  {
+    _Error_Handler(__FILE__, __LINE__);
+  }
+
+  HAL_TIM_MspPostInit(&htim2);
+
+}
+
+/* TIM6 init function */
+static void MX_TIM6_Init(void)
+{
+
+  TIM_MasterConfigTypeDef sMasterConfig;
+
+  htim6.Instance = TIM6;
+  htim6.Init.Prescaler = 47000;
+  htim6.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim6.Init.Period = 2000;
+  htim6.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim6) != HAL_OK)
+  {
+    _Error_Handler(__FILE__, __LINE__);
+  }
+
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim6, &sMasterConfig) != HAL_OK)
+  {
+    _Error_Handler(__FILE__, __LINE__);
+  }
+
+}
+
+/* USART1 init function */
+static void MX_USART1_UART_Init(void)
+{
+
+  huart1.Instance = USART1;
+  huart1.Init.BaudRate = 115200;
+  huart1.Init.WordLength = UART_WORDLENGTH_8B;
+  huart1.Init.StopBits = UART_STOPBITS_1;
+  huart1.Init.Parity = UART_PARITY_NONE;
+  huart1.Init.Mode = UART_MODE_TX_RX;
+  huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart1.Init.OverSampling = UART_OVERSAMPLING_16;
+  huart1.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
+  huart1.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+  if (HAL_UART_Init(&huart1) != HAL_OK)
+  {
+    _Error_Handler(__FILE__, __LINE__);
+  }
+
+}
+
+/* USART3 init function */
+static void MX_USART3_UART_Init(void)
+{
+
+  huart3.Instance = USART3;
+  huart3.Init.BaudRate = 115200;
+  huart3.Init.WordLength = UART_WORDLENGTH_8B;
+  huart3.Init.StopBits = UART_STOPBITS_1;
+  huart3.Init.Parity = UART_PARITY_NONE;
+  huart3.Init.Mode = UART_MODE_TX_RX;
+  huart3.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart3.Init.OverSampling = UART_OVERSAMPLING_16;
+  huart3.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
+  huart3.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+  if (HAL_UART_Init(&huart3) != HAL_OK)
+  {
+    _Error_Handler(__FILE__, __LINE__);
+  }
+
+}
+
+/** Configure pins as 
+        * Analog 
+        * Input 
+        * Output
+        * EVENT_OUT
+        * EXTI
+*/
+static void MX_GPIO_Init(void)
+{
+
+  GPIO_InitTypeDef GPIO_InitStruct;
+
+  /* GPIO Ports Clock Enable */
+  __HAL_RCC_GPIOA_CLK_ENABLE();
+  __HAL_RCC_GPIOC_CLK_ENABLE();
+  __HAL_RCC_GPIOB_CLK_ENABLE();
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOC, LED_Red_Pin|LED_Blue_Pin|LED_Orange_Pin|LED_Green_Pin, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin : Push_Button_Pin */
+  GPIO_InitStruct.Pin = Push_Button_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(Push_Button_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : LED_Red_Pin LED_Blue_Pin LED_Orange_Pin LED_Green_Pin */
+  GPIO_InitStruct.Pin = LED_Red_Pin|LED_Blue_Pin|LED_Orange_Pin|LED_Green_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+  /* EXTI interrupt init*/
+  HAL_NVIC_SetPriority(EXTI0_1_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(EXTI0_1_IRQn);
+
+}
+
+/* USER CODE BEGIN 4 */
+
+/* USER CODE END 4 */
+
+/**
+  * @brief  This function is executed in case of error occurrence.
+  * @param  file: The file name as string.
+  * @param  line: The line in file as a number.
+  * @retval None
+  */
+void _Error_Handler(char *file, int line)
+{
+  /* USER CODE BEGIN Error_Handler_Debug */
+  /* User can add his own implementation to report the HAL error return state */
+  while(1)
+  {
+	  HAL_GPIO_TogglePin(GPIOC,LED_Blue_Pin);
+	  HAL_Delay(500);
+  }
+  /* USER CODE END Error_Handler_Debug */
+}
+
+#ifdef  USE_FULL_ASSERT
+/**
+  * @brief  Reports the name of the source file and the source line number
+  *         where the assert_param error has occurred.
+  * @param  file: pointer to the source file name
+  * @param  line: assert_param error line source number
+  * @retval None
+  */
+void assert_failed(uint8_t* file, uint32_t line)
+{ 
+  /* USER CODE BEGIN 6 */
+  /* User can add his own implementation to report the file name and line number,
+     tex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
+  /* USER CODE END 6 */
+}
+#endif /* USE_FULL_ASSERT */
+
+/**
+  * @}
+  */
+
+/**
+  * @}
+  */
+
+/************************ (C) COPYRIGHT STMicroelectronics *****END OF FILE****/
